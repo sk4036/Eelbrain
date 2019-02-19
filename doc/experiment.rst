@@ -353,23 +353,8 @@ input can be customized by adding a :class:`RawSource` pipe).
 Each subsequent preprocessing step is defined with its input as first argument
 (``source``).
 
-:mod:`mne` has changed default values for filtering in the past. In order to
-keep consistent settings across different versions it is advantageous to fully
-define filter parameters when starting a new experiment.
-
 For example, the following definition sets up a pipeline using TSSS and
 band-pass filtering, and optionally ICA::
-
-    # as of mne 0.17
-    FILTER_KWARGS = {
-        'filter_length': 'auto',
-        'l_trans_bandwidth': 'auto',
-        'h_trans_bandwidth': 'auto',
-        'phase': 'zero',
-        'fir_window': 'hamming',
-        'fir_design': 'firwin',
-    }
-
 
     class Experiment(MneExperiment):
 
@@ -377,9 +362,9 @@ band-pass filtering, and optionally ICA::
 
         raw = {
             'tsss': RawMaxwell('raw', st_duration=10., ignore_ref=True, st_correlation=0.9, st_only=True),
-            '1-40': RawFilter('tsss', 1, 40, **FILTER_KWARGS),
+            '1-40': RawFilter('tsss', 1, 40),
             'ica': RawICA('tsss', 'session', 'extended-infomax', n_components=0.99),
-            'ica1-40': RawFilter('ica', 1, 40, **FILTER_KWARGS),
+            'ica1-40': RawFilter('ica', 1, 40),
         }
         
 To use the ``raw --> TSSS --> 1-40 Hz band-pass`` pipeline, use ``e.set(raw="1-40")``. 

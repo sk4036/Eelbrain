@@ -18,16 +18,6 @@ from eelbrain.pipeline import *
 from eelbrain import MneExperiment
 
 
-FILTER_KWARGS = {
-    'filter_length': 'auto',
-    'l_trans_bandwidth': 'auto',
-    'h_trans_bandwidth': 'auto',
-    'phase': 'zero',
-    'fir_window': 'hamming',
-    'fir_design': 'firwin',
-}
-
-
 class SampleExperiment(MneExperiment):
 
     owner = "me@nyu.edu"
@@ -49,9 +39,9 @@ class SampleExperiment(MneExperiment):
 
     raw = {
         'tsss': RawMaxwell('raw', st_duration=10., ignore_ref=True, st_correlation=.9, st_only=True),
-        '1-40': RawFilter('tsss', 1, 40, **FILTER_KWARGS),
+        '1-40': RawFilter('tsss', 1, 40),
         'ica': RawICA('tsss', 'sample', method='fastica', n_components=0.95),
-        'ica1-40': RawFilter('ica', 1, 40, **FILTER_KWARGS),
+        'ica1-40': RawFilter('ica', 1, 40),
     }
 
     epochs = {

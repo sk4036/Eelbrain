@@ -2,26 +2,15 @@
 from eelbrain.pipeline import *
 
 
-# as of mne 0.17
-FILTER_KWARGS = {
-    'filter_length': 'auto',
-    'l_trans_bandwidth': 'auto',
-    'h_trans_bandwidth': 'auto',
-    'phase': 'zero',
-    'fir_window': 'hamming',
-    'fir_design': 'firwin',
-}
-
-
 class Mouse(MneExperiment):
 
     sessions = 'CAT'
 
     raw = {
         'tsss': RawMaxwell('raw', st_duration=10., ignore_ref=True, st_correlation=0.9, st_only=True),
-        '1-40': RawFilter('tsss', 1, 40, **FILTER_KWARGS),
+        '1-40': RawFilter('tsss', 1, 40),
         'fastica': RawICA('tsss', 'CAT', 'fastica', n_components=0.99),
-        'fastica1-40': RawFilter('fastica', 1, 40, **FILTER_KWARGS),
+        'fastica1-40': RawFilter('fastica', 1, 40),
     }
 
     variables = {
