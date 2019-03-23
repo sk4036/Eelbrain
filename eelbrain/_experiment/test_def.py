@@ -491,6 +491,23 @@ class ROITestResult:
         self.__init__(**state)
 
 
+class ROI2StageResult(ROITestResult):
+    """Test results for 2-stage tests in one or more ROIs
+
+    Attributes
+    ----------
+    subjects : tuple of str
+        Subjects included in the test.
+    samples : int
+        ``samples`` parameter used for permutation tests.
+    res : {str: LMGroup} dict
+        Test result for each ROI.
+    n_trials_ds : Dataset
+        Dataset describing how many trials were used in each condition per
+        subject.
+    """
+
+
 def find_test_vars(params):
     "Find variables used in a test definition"
     if 'model' in params and params['model'] is not None:

@@ -75,7 +75,7 @@ from .preprocessing import (
     compare_pipelines, ask_to_delete_ica_files)
 from .test_def import (
     Test, EvokedTest,
-    ROITestResult, TestDims, TwoStageTest,
+    ROITestResult, ROI2StageResult, TestDims, TwoStageTest,
     assemble_tests, find_test_vars,
 )
 from .variable_def import Variables
@@ -3395,13 +3395,13 @@ class MneExperiment(FileTree):
                     parc_dim = 'source'
         elif isinstance(data.source, str):
             if not isinstance(parc, str):
-                raise TypeError("parc needs to be set for ROI test (data=%r)" % (data.string,))
+                raise TypeError(f"parc needs to be set for ROI test (data={data.string!r})")
             elif mask is not None:
-                raise TypeError("Mask=%r invalid with data=%r" % (mask, data.string))
+                raise TypeError(f"mask={mask!r}: invalid for data={data.string!r}")
         elif parc is not None:
-            raise TypeError("parc=%r invalid for sensor space test (data=%r)" % (parc, data.string))
+            raise TypeError(f"parc={parc!r}: invalid for data={data.string!r}")
         elif mask is not None:
-            raise TypeError("mask=%r invalid for sensor space test (data=%r)" % (mask, data.string))
+            raise TypeError(f"mask={mask!r}: invalid for data={data.string!r}")
 
         do_test = res is None
         if do_test:
@@ -3410,30 +3410,12 @@ class MneExperiment(FileTree):
             test_kwargs = None
 
         if isinstance(test_obj, TwoStageTest):
-            if data.source is not True:
+            if isinstance(data.source, str):
+                res_data, res = self._make_test_rois_2stage(baseline, src_baseline, test_obj, samples, test_kwargs, res, data, return_data)
+            elif data.source is True:
+                res_data, res = self._make_test_2stage(baseline, src_baseline, mask, test_obj, test_kwargs, res, data, return_data)
+            else:
                 raise NotImplementedError(f"Two-stage test with data={data.string!r}")
-
-            if test_obj.model is not None:
-                self.set(model=test_obj._within_model)
-
-            # stage 1
-            lms = []
-            dss = []
-            for subject in self.iter(progress_bar="Loading stage 1 models"):
-                if test_obj.model is None:
-                    ds = self.load_epochs_stc(subject, baseline, src_baseline, morph=True, mask=mask, vardef=test_obj.vars)
-                else:
-                    ds = self.load_evoked_stc(subject, baseline, src_baseline, morph=True, mask=mask, vardef=test_obj.vars)
-
-                if do_test:
-                    lms.append(test_obj.make_stage_1(data.y_name, ds, subject))
-                if return_data:
-                    dss.append(ds)
-
-            if do_test:
-                res = test_obj.make_stage_2(lms, test_kwargs)
-
-            res_data = combine(dss) if return_data else None
         elif isinstance(data.source, str):
             res_data, res = self._make_test_rois(baseline, src_baseline, test_obj, samples, pmin, test_kwargs, res, data)
         else:
@@ -3456,37 +3438,44 @@ class MneExperiment(FileTree):
         else:
             return res
 
-    def _make_test_rois(self, baseline, src_baseline, test_obj, samples, pmin,
-                        test_kwargs, res, data):
+    @staticmethod
+    def _src_to_label_tc(ds, func):
+        src = ds.pop('src')
+        out = {}
+        for label in src.source.parc.cells:
+            if label.startswith('unknown-'):
+                continue
+            label_ds = ds.copy()
+            label_ds['label_tc'] = getattr(src, func)(source=label)
+            out[label] = label_ds
+        return out
+
+    def _make_test_rois(self, baseline, src_baseline, test_obj, samples, pmin, test_kwargs, res, data):
         # load data
-        dss = defaultdict(list)
+        dss_list = []
         n_trials_dss = []
+        labels = set()
         subjects = self.get_field_values('subject')
         for _ in self.iter(progress_bar="Loading data"):
-            ds = self.load_evoked_stc(None, baseline, src_baseline, vardef=test_obj.vars)
-            src = ds.pop('src')
-            n_trials_dss.append(ds.copy())
-            for label in src.source.parc.cells:
-                if label.startswith('unknown-'):
-                    continue
-                label_ds = ds.copy()
-                label_ds['label_tc'] = getattr(src, data.source)(source=label)
-                dss[label].append(label_ds)
-            del src
+            ds = self.load_evoked_stc(1, baseline, src_baseline, vardef=test_obj.vars)
+            dss = self._src_to_label_tc(ds, data.source)
+            n_trials_dss.append(ds)
+            dss_list.append(dss)
+            labels.update(dss.keys())
 
-        label_data = {label: combine(data, incomplete='drop') for
-                      label, data in dss.items()}
+        label_dss = {label: [dss[label] for dss in dss_list if label in dss] for label in labels}
+        label_data = {label: combine(dss, incomplete='drop') for label, dss in label_dss.items()}
         if res is not None:
             return label_data, res
 
         n_trials_ds = combine(n_trials_dss, incomplete='drop')
 
         # n subjects per label
-        n_per_label = {label: len(dss[label]) for label in dss}
+        n_per_label = {label: len(dss) for label, dss in label_dss.items()}
 
         # compute results
         do_mcc = (
-            len(dss) > 1 and  # more than one ROI
+            len(labels) > 1 and  # more than one ROI
             pmin not in (None, 'tfce') and  # not implemented
             len(set(n_per_label.values())) == 1  # equal n permutations
         )
@@ -3503,6 +3492,68 @@ class MneExperiment(FileTree):
 
         res = ROITestResult(subjects, samples, n_trials_ds, merged_dist, label_results)
         return label_data, res
+
+    def _make_test_rois_2stage(self, baseline, src_baseline, test_obj, samples, test_kwargs, res, data, return_data):
+        # stage 1
+        lms = []
+        res_data = []
+        n_trials_dss = []
+        subjects = self.get_field_values('subject')
+        for subject in self.iter(progress_bar="Loading stage 1 models"):
+            if test_obj.model is None:
+                ds = self.load_epochs_stc(1, baseline, src_baseline, mask=True, vardef=test_obj.vars)
+            else:
+                ds = self.load_evoked_stc(1, baseline, src_baseline, mask=True, vardef=test_obj.vars, model=test_obj._within_model)
+
+            dss = self._src_to_label_tc(ds, data.source)
+            if res is None:
+                lms.append({label: test_obj.make_stage_1('label_tc', ds, subject) for label, ds in dss.items()})
+                n_trials_dss.append(ds)
+            if return_data:
+                res_data.append(dss)
+
+        # stage 2
+        if res is None:
+            labels = set(chain.from_iterable(lms))
+            ress = {}
+            for label in sorted(labels):
+                label_lms = [subject_lms[label] for subject_lms in lms if label in subject_lms]
+                if len(label_lms) <= 2:
+                    continue
+                ress[label] = test_obj.make_stage_2(label_lms, test_kwargs)
+            n_trials_ds = combine(n_trials_dss, incomplete='drop')
+            res = ROI2StageResult(subjects, samples, n_trials_ds, None, ress)
+
+        if return_data:
+            data_out = {}
+            for label in res.keys():
+                label_data = [subject_data[label] for subject_data in res_data if label in subject_data]
+                data_out[label] = combine(label_data)
+        else:
+            data_out = None
+        return data_out, res
+
+    def _make_test_2stage(self, baseline, src_baseline, mask, test_obj, test_kwargs, res, data, return_data):
+        # stage 1
+        lms = []
+        res_data = []
+        for subject in self.iter(progress_bar="Loading stage 1 models"):
+            if test_obj.model is None:
+                ds = self.load_epochs_stc(1, baseline, src_baseline, morph=True, mask=mask, vardef=test_obj.vars)
+            else:
+                ds = self.load_evoked_stc(1, baseline, src_baseline, morph=True, mask=mask, vardef=test_obj.vars, model=test_obj._within_model)
+
+            if res is None:
+                lms.append(test_obj.make_stage_1(data.y_name, ds, subject))
+            if return_data:
+                res_data.append(ds)
+
+        # stage 2
+        if res is None:
+            res = test_obj.make_stage_2(lms, test_kwargs)
+        if return_data:
+            res_data = combine(res_data)
+        return res_data, res
 
     def make_annot(self, redo=False, **state):
         """Make sure the annot files for both hemispheres exist
