@@ -12,9 +12,7 @@ from numpy.testing import assert_almost_equal
 from eelbrain import *
 from eelbrain.pipeline import *
 from eelbrain._exceptions import DefinitionError
-from eelbrain.testing import (
-    TempDir, assert_dataobj_equal, import_attr, requires_mne_sample_data,
-)
+from eelbrain.testing import TempDir, assert_dataobj_equal, import_attr, requires_mne_sample_data, slow_test
 
 
 sample_path = Path(__file__).parents[3] / 'examples/experiment'
@@ -236,6 +234,32 @@ def test_sample():
     assert e.get('raw') == '1-40'
     with pytest.raises(IOError):
         e.load_test('a>v', 0.05, 0.2, 0.05, samples=20, data='sensor', baseline=False)
+
+
+@requires_mne_sample_data
+@slow_test
+def test_sample_source():
+    set_log_level('warning', 'mne')
+    SampleExperiment = import_attr(sample_path / 'sample_experiment.py', 'SampleExperiment')
+    tempdir = TempDir()
+    datasets.setup_samples_experiment(tempdir, 3, 2, mris=True)  # TODO: use sample MRI which already has forward solution
+    root = join(tempdir, 'SampleExperiment')
+    e = SampleExperiment(root)
+
+    # source space tests
+    e.set(src='ico-4', rej='', epoch='auditory')
+    # These two tests are only identical if the evoked has been cached before the first test is loaded
+    ds = e.load_evoked(-1, model='side')
+    resp = e.load_test('left=right', 0.05, 0.2, 0.05, samples=100, parc='ac', make=True)
+    resm = e.load_test('left=right', 0.05, 0.2, 0.05, samples=100, mask='ac', make=True)
+    assert_dataobj_equal(resp.t, resm.t)
+    # ROI tests
+    e.set(epoch='target')
+    ress = e.load_test('left=right', 0.05, 0.2, 0.05, samples=100, data='source.rms', parc='ac', make=True)
+    res = ress.res['ac-lh']
+    assert res.p.min() == pytest.approx(0.429, abs=.001)
+    ress = e.load_test('twostage', 0.05, 0.2, 0.05, samples=100, data='source.rms', parc='ac', make=True)
+    res = ress.res['ac-lh']
 
 
 @requires_mne_sample_data
