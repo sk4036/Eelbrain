@@ -63,6 +63,8 @@ class SampleExperiment(MneExperiment):
         'visual': SecondaryEpoch('target', "modality == 'visual'"),
         # recombine auditory and visual
         'av': SuperEpoch(('auditory', 'visual')),
+        # noise covariance
+        'cov': SecondaryEpoch('target', tmax=0),
     }
 
     tests = {
@@ -77,3 +79,11 @@ class SampleExperiment(MneExperiment):
             vars={'side_left': "side == 'left'",
                   'modality_a': "modality == 'auditory'"}),
     }
+
+    parcs = {
+        'ac': CombinationParc('aparc', {'ac': 'transversetemporal'}),
+    }
+
+
+if __name__ == '__main__':
+    e = SampleExperiment("~/Data/SampleExperiment")

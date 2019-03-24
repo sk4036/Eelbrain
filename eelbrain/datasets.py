@@ -1,7 +1,9 @@
 """Some basic example datasets for testing."""
 from distutils.version import LooseVersion
+from itertools import product
 import os
 from pathlib import Path
+import shutil
 
 import mne
 from mne import minimum_norm as mn
@@ -468,7 +470,7 @@ def get_uv(seed=0, nrm=False, vector=False):
     return ds
 
 
-def setup_samples_experiment(dst, n_subjects=3, n_segments=4, n_sessions=1, n_visits=1, name='SampleExperiment'):
+def setup_samples_experiment(dst, n_subjects=3, n_segments=4, n_sessions=1, n_visits=1, name='SampleExperiment', mris=False, mris_only=False):
     """Setup up file structure for the SampleExperiment class
 
     Parameters
@@ -487,16 +489,66 @@ def setup_samples_experiment(dst, n_subjects=3, n_segments=4, n_sessions=1, n_vi
     name : str
         Name for the directory for the new experiment (default
         ``'SampleExperiment'``).
+    mris : bool
+        Set up MRIs.
+    mris_only : bool
+        Only create MRIs, skip MEG data (add MRIs to existing experiment data).
     """
-    data_path = mne.datasets.sample.data_path()
-    raw_path = os.path.join(data_path, 'MEG', 'sample', 'sample_audvis_raw.fif')
-    raw = mne.io.read_raw_fif(raw_path)
-    raw.info['bads'] = []
-    sfreq = raw.info['sfreq']
+    data_path = Path(mne.datasets.sample.data_path())
+    dst = Path(dst).expanduser().resolve()
+    root = dst / name
+    root.mkdir(exist_ok=mris_only)
 
     if n_sessions > 1 and n_visits > 1:
         raise NotImplementedError
     n_recordings = n_subjects * max(n_sessions, n_visits)
+    subjects = [f'R{s_id:04}' for s_id in range(n_subjects)]
+
+    meg_sdir = root / 'meg'
+    meg_sdir.mkdir(exist_ok=mris_only)
+
+    if mris:
+        mri_sdir = root / 'mri'
+        if mris_only and mri_sdir.exists():
+            shutil.rmtree(mri_sdir)
+        mri_sdir.mkdir()
+        # copy rudimentary fsaverage
+        surf_names = ['inflated', 'white', 'orig', 'orig_avg', 'curv', 'sphere']
+        files = {
+            'bem': ['fsaverage-head.fif', 'fsaverage-inner_skull-bem.fif', 'fsaverage-ico-4-src.fif'],
+            'label': ['lh.aparc.annot', 'rh.aparc.annot'],
+            'surf': [f'{hemi}.{name}' for hemi, name in product(['lh', 'rh'], surf_names)],
+            'mri': [],
+        }
+        src_s_dir = data_path / 'subjects' / 'fsaverage'
+        dst_s_dir = mri_sdir / 'fsaverage'
+        dst_s_dir.mkdir()
+        for dir_name, file_names in files.items():
+            src_dir = src_s_dir / dir_name
+            dst_dir = dst_s_dir / dir_name
+            dst_dir.mkdir()
+            for file_name in file_names:
+                shutil.copy(src_dir / file_name, dst_dir / file_name)
+        # create scaled brains
+        trans = mne.Transform(4, 5, [[ 0.9998371,  -0.00766024,  0.01634169,  0.00289569],
+                                     [ 0.00933457,  0.99443108, -0.10497498, -0.0205526 ],
+                                     [-0.01544655,  0.10511042,  0.9943406,  -0.04443745],
+                                     [ 0.,          0.,          0.,          1.        ]])
+        # os.environ['_MNE_FEW_SURFACES'] = 'true'
+        for subject in subjects:
+            mne.scale_mri('fsaverage', subject, 1., subjects_dir=mri_sdir, skip_fiducials=True, labels=False)
+            meg_dir = meg_sdir / subject
+            meg_dir.mkdir(exist_ok=mris_only)
+            trans.save(str(meg_dir / f'{subject}-trans.fif'))
+        # del os.environ['_MNE_FEW_SURFACES']
+    if mris_only:
+        return
+
+    # MEG
+    raw_path = data_path / 'MEG' / 'sample' / 'sample_audvis_raw.fif'
+    raw = mne.io.read_raw_fif(str(raw_path))
+    raw.info['bads'] = []
+    sfreq = raw.info['sfreq']
 
     # find segmentation points
     events = mne.find_events(raw)
@@ -516,14 +568,6 @@ def setup_samples_experiment(dst, n_subjects=3, n_segments=4, n_sessions=1, n_vi
             n = 0
     else:
         raise ValueError("Not enough data in sample raw. Try smaller ns.")
-    dst = os.path.realpath(os.path.expanduser(dst))
-    root = os.path.join(dst, name)
-    meg_sdir = os.path.join(root, 'meg')
-    meg_dir = os.path.join(meg_sdir, '{subject}')
-    raw_file = os.path.join(meg_dir, '{subject}_{session}-raw.fif')
-
-    os.mkdir(root)
-    os.mkdir(meg_sdir)
 
     if n_visits > 1:
         sessions = ['sample', *(f'sample {i}' for i in range(1, n_visits))]
@@ -532,12 +576,12 @@ def setup_samples_experiment(dst, n_subjects=3, n_segments=4, n_sessions=1, n_vi
     else:
         sessions = ['sample']
 
-    for s_id in range(n_subjects):
-        subject = 'R%04i' % s_id
-        os.mkdir(meg_dir.format(subject=subject))
+    for subject in subjects:
+        meg_dir = meg_sdir / subject
+        meg_dir.mkdir(exist_ok=mris)
         for session in sessions:
             start, stop = segs.pop()
             raw_ = raw.copy().crop(start, stop)
             raw_.load_data()
             raw_.pick_types('mag', stim=True, exclude=[])
-            raw_.save(raw_file.format(subject=subject, session=session))
+            raw_.save(str(meg_dir / f'{subject}_{session}-raw.fif'))
