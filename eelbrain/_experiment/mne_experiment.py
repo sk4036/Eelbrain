@@ -2662,6 +2662,8 @@ class MneExperiment(FileTree):
             baseline = state.pop('sns_baseline')
             warnings.warn("The sns_baseline parameter is deprecated, use baseline instead", DeprecationWarning)
 
+        if isinstance(mask, str):
+            state['parc'] = mask
         if state:
             self.set(**state)
 
@@ -2676,16 +2678,17 @@ class MneExperiment(FileTree):
         sns_ndvar = keep_evoked and ndvar
         ds = self.load_evoked(subjects, baseline, sns_ndvar, cat, decim, data_raw, vardef)
 
-        # from-subject for the purpose of morphing
+        # MRI subjects
         common_brain = self.get('common_brain')
         meg_subjects = ds['subject'].cells
-        from_subjects = {}
+        from_subjects = {}  # for the purpose of morphing
+        mri_subjects = {}  # for representing
         for subject in meg_subjects:
+            mri_subjects[subject] = self.get('mrisubject', subject=subject)
             if is_fake_mri(self.get('mri-dir', subject=subject)):
-                subject_from = common_brain
+                from_subjects[subject] = common_brain
             else:
-                subject_from = self.get('mrisubject', subject=subject)
-            from_subjects[subject] = subject_from
+                from_subjects[subject] = mri_subjects[subject]
 
         # make sure annot files are available (needed only for NDVar)
         if ndvar:
@@ -2694,15 +2697,13 @@ class MneExperiment(FileTree):
             elif len(meg_subjects) > 1:
                 raise ValueError(f"ndvar=True, morph=False with multiple subjects: Can't create ndvars with data from different brains")
             else:
-                self.make_annot(mrisubject=from_subjects[meg_subjects[0]])
+                self.make_annot(mrisubject=mri_subjects[meg_subjects[0]])
 
         # convert evoked objects
         stcs = []
         invs = {}
         mm_cache = CacheDict(self.load_morph_matrix, 'mrisubject')
         for subject, evoked in ds.zip('subject', 'evoked'):
-            subject_from = from_subjects[subject]
-
             # get inv
             if subject in invs:
                 inv = invs[subject]
@@ -2717,6 +2718,7 @@ class MneExperiment(FileTree):
                 rescale(stc._data, stc.times, src_baseline, 'mean', copy=False)
 
             if morph:
+                subject_from = from_subjects[subject]
                 if subject_from == common_brain:
                     stc.subject = common_brain
                 else:
@@ -2725,16 +2727,16 @@ class MneExperiment(FileTree):
             stcs.append(stc)
 
         # add to Dataset
-        src = self.get('src')
-        parc = mask if isinstance(mask, str) else self.get('parc') or None
-        mri_sdir = self.get('mri-sdir')
         if ndvar:
             if morph:
                 key, subject = 'srcm', common_brain
             else:
-                key, subject = 'src', meg_subjects[0]
+                key, subject = 'src', mri_subjects[meg_subjects[0]]
+            src = self.get('src')
+            mri_sdir = self.get('mri-sdir')
             method = self._params['apply_inv_kw']['method']
             fixed = self._params['make_inv_kw'].get('fixed', False)
+            parc = mask if isinstance(mask, str) else self.get('parc') or None
             ds[key] = load.fiff.stc_ndvar(stcs, subject, src, mri_sdir, method, fixed, parc=parc, connectivity=self.get('connectivity'))
             if mask:
                 _mask_ndvar(ds, key)
